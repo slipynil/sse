@@ -1,3 +1,3 @@
-module github.com/mirzaakhena/sse
+module github.com/slipynil/sse
 
-go 1.15
+go 1.26.1

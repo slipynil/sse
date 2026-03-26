@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"net/http"
 )
 
@@ -10,7 +11,7 @@ var messageChan chan string
 func handleSSE() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 
-		fmt.Printf("Get handshake from client\n")
+		log.Println("Get handshake from client")
 
 		// prepare the header for browser (if you want to use browser as client)
 		// this header can be use by browser so that it will directly print the message
@@ -19,6 +20,9 @@ func handleSSE() http.HandlerFunc {
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("Connection", "keep-alive")
 		w.Header().Set("Access-Control-Allow-Origin", "*")
+
+		// prepare the flusher
+		rc := http.NewResponseController(w)
 
 		// instantiate the channel
 		messageChan = make(chan string)
@@ -29,11 +33,8 @@ func handleSSE() http.HandlerFunc {
 				close(messageChan)
 				messageChan = nil
 			}
-			fmt.Printf("client connection is closed\n")
+			log.Println("client connection is closed")
 		}()
-
-		// prepare the flusher
-		flusher, _ := w.(http.Flusher)
 
 		// trap the request under loop forever
 		for {
@@ -42,8 +43,16 @@ func handleSSE() http.HandlerFunc {
 
 			// message will received here and printed
 			case message := <-messageChan:
-				fmt.Fprintf(w, "%s\n", message)
-				flusher.Flush()
+
+				// write the message to buffer
+				if _, err := fmt.Fprintf(w, "data: %s\n\n", message); err != nil {
+					log.Println("write error:", err)
+					return
+				}
+				// send the buffer to client
+				if err := rc.Flush(); err != nil {
+					log.Println(err)
+				}
 
 			// connection is closed then defer will be executed
 			case <-r.Context().Done():
@@ -59,30 +68,28 @@ func sendMessage() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 
 		if messageChan != nil {
-			fmt.Printf("print message to client\n")
-
-			message := "Hello Client"
-
-			// send the message through the available channel
-			messageChan <- message
+			log.Println("print message to client")
+			messageChan <- "Hello Client"
 		}
-
+		w.WriteHeader(http.StatusNoContent)
 	}
 }
 
 func main() {
 
-	fmt.Printf("Server is running,\nmakesure you already run the client\n")
-	fmt.Printf("open another console and call\n\n")
-	fmt.Printf(" curl localhost:3000/sendmessage\n\n")
+	log.Println(
+		"\n Server is running,\n",
+		"makesure you already run the client\n",
+		"open another console and call\n",
+		"curl localhost:3000/sendmessage\n",
+	)
 
 	http.HandleFunc("/handshake", handleSSE())
-
 	http.HandleFunc("/sendmessage", sendMessage())
 
 	err := http.ListenAndServe("localhost:3000", nil)
 	if err != nil {
-		panic("HTTP server error")
+		log.Fatal("HTTP server error: %w", err)
 	}
 
 }

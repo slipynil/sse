@@ -2,73 +2,65 @@ package main
 
 import (
 	"bufio"
-	"fmt"
+	"log"
 	"net/http"
 	"time"
 )
 
-func main() {
+const url = "http://localhost:3000/handshake"
 
-	// prepare the http client and handshake URL
-	client := &http.Client{}
-	req, err := http.NewRequest("GET", "http://localhost:3000/handshake", nil)
-	if err != nil {
-		panic(err)
-	}
+func reqSSE(client *http.Client) <-chan string {
+	// prepare the required channel
+	messages := make(chan string) // text channel
 
-	fmt.Printf("Client is running,\nclient trying to initiate the communication to server\n")
+	go func() {
+		defer close(messages)
 
-	for {
+		log.Println("\nClient is running",
+			"\ntrying to initiate the communication to server\n")
 
-		fmt.Printf("try to shake hand to server in second %v\n", time.Now().Format("5"))
-		res, err := client.Do(req)
-
-		// retry if handshake is still fail
-		if err != nil {
-			time.Sleep(1 * time.Second)
-			continue
-		}
-
-		fmt.Printf("connection to server is established..\n")
-
-		stillListening := true
-
-		for stillListening {
-
-			// prepare the required channel
-			messageChan := make(chan string)
-			stopChan := make(chan int)
-
-			go func() {
-
-				scanner := bufio.NewScanner(res.Body)
-
-				if scanner.Scan() {
-					// send the message event
-					messageChan <- scanner.Text()
-				}
-
-				if err := scanner.Err(); err != nil {
-					// send the stop event
-					stopChan <- 1
-				}
-
-			}()
-
-			select {
-
-			case <-stopChan:
-				// break the inner loop
-				stillListening = false
-
-			case message := <-messageChan:
-				// print the message coming
-				fmt.Printf("%s\n", message)
-
+		// цикл где крутяться запросы реконнекты
+		for {
+			req, err := http.NewRequest("GET", url, nil)
+			if err != nil {
+				log.Println("failed to create new req:", err)
+				time.Sleep(time.Second)
+				continue
 			}
 
+			log.Println("try to shake hand to server")
+
+			res, err := client.Do(req)
+			if err != nil {
+				log.Println(err)
+				time.Sleep(1 * time.Second)
+				continue
+			}
+
+			log.Println("connection to server is established..")
+
+			scanner := bufio.NewScanner(res.Body)
+			for scanner.Scan() {
+				line := scanner.Text()
+				messages <- line
+			}
+			if err := scanner.Err(); err != nil {
+				log.Println("read error:", err)
+			} else {
+				log.Println("server closed connection")
+			}
+			// если соединение умерло, идем на реконект
+			defer res.Body.Close()
+			time.Sleep(time.Second)
 		}
+	}()
+	return messages
+}
 
+func main() {
+	client := new(http.Client)
+	// бесконечный цикл обработки сообщений
+	for msg := range reqSSE(client) {
+		log.Println("recv:", msg)
 	}
-
 }
