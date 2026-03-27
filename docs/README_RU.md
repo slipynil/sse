@@ -4,7 +4,7 @@
 
 **Dead simply guide how is SSE works**
 
-[🇬🇧 English](../README.md) • [🇷🇺 Russian](docs/README_RU.md)
+[🇬🇧 English](../README.md) • [🇷🇺 Russian](README_RU.md)
 
 Сделано с ❤️ от [@Slipynil](https://github.com/slipynil)
 
