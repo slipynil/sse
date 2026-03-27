@@ -1,191 +1,239 @@
-# Server Sent Events (SSE) Server and client implementation with Go
+# Что такое *SSE*?
+***SSE (Server Send Event)*** - это технология позволяющая серверу отправлять данные клиенту в одностороннем режиме. В классическом протоколе HTTP сервер не может сам инициировать передачу данных, так как он только отвечает на входящие запросы. *SSE* решает эту проблему позволяя серверу пушить сообщения по открытому соединению.
 
-## What is this code about?
-This is a very minimal code setup for SSE implementation without any external dependecy for both server and client.
+## Зачем использовать *SSE*?
+*SSE* оптимален, когда требуется одностороняя передача данных от сервера к клиенту в реальном времени, а встречный поток сообщений от клиента в задаче не нужен.
 
-## What is SSE?
-SSE is the way we send messages from server to client.
-By default, server cannot send messages to client. Because server is not recognize the client. But client can accessed easily the server because server has public IP.
+## Когда следует использовать *SSE*?
+Выбирайте *SSE*, если вам нужна простая односторонняя связь (например, для ленты уведомлений, курсов валют или прогресс-баров). Если же приложению необходим полноценный двусторонний обмен данными в реальном времени (чат, онлайн-игра), то лучше использовать *WebSocket*.
 
-## Why use SSE?
-Because we want server have an ability to send message to client. 
+## Как работает система *SSE*?
+Поскольку сервер не может начать передачу первым, соединение всегда **инициализирует клиент** (**1**). Он отправляет специальный HTTP-запрос, в котором сообщает, что готов принимать поток событий (*Event Stream*). Сервер не закрывает соединение после первого ответа, а оставляет его открытым, "удерживая" канал для передачи будущих сообщений. 
 
-## When to use SSE?
-We use SSE whenever we have requirement that need simple one-way communication only from server to client. If we need two-way communication from server to client, then it's better to use websocket instead.
-
-## How this SSE works?
-Since by default server does not recognize the client, the first handshake must always started by client (no 1). After server gets this handshake request from client, server does not immediately reply but instead hold the response. Right before server has to return the response, server will "trap" this request with loop forever. Under this "eternal" seamless connection, server can take the advantage to send as many messages to the client as desired (no 2, 3, 4). Actually under this request, client waits forever for the server's ennding the response but it never happen until server decide to end it (no 5).
-
+## Что это значит?
+Вместо того, чтобы отправить данные и разорвать связь, сервер переводит HTTP-соединение в режим **потоковой передачи**. В рамках этого "вечного" соединения сервер может в любой момент отправить клиенту новое сообщение (**2, 3, 4**) без необходимости получать новый запрос.
+Фактически клиент находится в состоянии ожидания продолжения ответа. Это продолжается до тех пор, пока сервер сам не решит завершить сессию или пока не произойдет разрыв связи со стороны клиента (**5**). При случайном обрыве клиент, как правило, автоматически пытается переподключиться.
 ![Sequence Diagram](http://www.plantuml.com/plantuml/proxy?cache=no&src=https://raw.githubusercontent.com/mirzaakhena/sse/master/sse_flow.pu)
 
-## How to close connection?
-The server can decide whether to close the connection to the client by leaving the loop. On the other hand, the client can also close the connection to the server easily by canceling the handshake request that has not been completed (because of loop traps). This will trigger the server to close the connection to the client too.
+## Как разорвать соединение?
+Сервер может закрыть соединение в любой момент, просто завершив передачу потока данных. Со своей стороны клиент также может легко прервать связь, отменив активный HTTP-запрос. Как только клиент разрывает соединение, сервер получает уведомление об этом и освобождает ресурсы, выделенные под этот канал.
 
-## Why not just using websocket?
-We can also use websocket for this purpose but SSE is much simpler. Back to our requirements, if we need two-way communication we would prefer to use websocket.
+## Почему не использовать WebSocket во всех случаях?
+Хотя WebSocket обеспечивает полноценную двустороннюю связь, у SSE есть свои преимущества:
 
-## How to implement SSE Server with go?
-We will use the built in golang http libary. Actually you can also use other libraries such as gin or echo to implement the same thing
-```
+* Простота реализации: SSE работает поверх обычного протокола HTTP и не требует настройки специальных прокси-серверов или сложных протоколов.
+* Экономия ресурсов (RPS): Для простых уведомлений SSE потребляет меньше ресурсов сервера, так как работает в рамках стандартного стека HTTP.
+* Автоматическое переподключение: В стандарт SSE встроена поддержка восстановления связи при обрыве — браузер сделает это сам, без написания лишнего кода.
+* Легкость отладки: Поток сообщений SSE — это обычный текст, который легко просматривать в консоли разработчика браузера.
+
+Итог: Если вам не нужно отправлять данные от клиента серверу каждые 100 мс (как в играх), SSE будет более легким и надежным решением.
+
+# Как реализовать *SSE*-сервер на Go?
+**Это упрощенный пример для одного активного соединения**
+
+## Архитектура системы
+В данной реализации используются два эндпоинта:
+* **`/handshake`** - эндпоинт для установки SSE-соединения. Клиент подключается к нему и получает открытый поток событий.
+* **`/sendmessage`** - эндпоинт для триггера отправки сообщений. Внешний запрос на этот эндпоинт помещает сообщение в канал `messageChan`, откуда оно передается активному клиенту.
+
+Глобальный канал `messageChan` служит связующим звеном между эндпоинтом отправки и активным SSE-соединением.
+
+⚠️ **Важные ограничения:**
+* Глобальный канал пересоздается при каждом новом подключении
+* При множественных одновременных подключениях возможны race conditions
+* Для production-окружения необходима карта каналов с мьютексами для поддержки нескольких клиентов
+
+Мы будем использовать встроенную библиотеку ***net/http*** для работы с *HTTP*. Можно использовать другие библиотеки, такие как *gin* или *echo*.
+```go
 func (w http.ResponseWriter, r *http.Request)
 ```
-
-Instantiate a channel variable called messageChan. A message to client will be delivered through this channel. It will defined somewhere that we can access it. Let say now we only simply deliver a string message.
-```
+Создайте канал с именем `messageChan`. Сообщение клиенту будет доставлено через него. Переменная канала должна быть определена где-нибудь, где мы сможем к ней получить доступ. Допустим, сейчас мы просто отправляем строковое сообщение.
+```go
 messageChan = make(chan string)
 ```
+Для части кода, отвечающей за "*trap-request*", мы будем использовать бесконечный цикл. Внутри этого цикла процесс будет заблокирован каналом `messageChan`. Канал `messageChan` продолжает ждать и прослушивать готовность сообщения. Если сообщение доступно, оно будет отправлено в HTTP-записывающее устройство. Нам также необходимо отправить сообщение в кэш, чтобы клиент мог его увидеть. В случае получения сигнала о закрытии соединения от клиента, функция `r.Context().Done()` выдаст сигнал "*close*", и мы сможем выйти из цикла (фактически, мы выходим их функции, а не просто из цикла). Здесь мы поддерживаем соединение.
+```go
+rc := http.NewResponseController(w)
 
-For the "trap request" part we will use the loop forever. Under this loop. The process will blocked by messageChan. The messageChan channel is keep waiting and listening for the message to be ready. If the message is available, then it will print to the http writer. We also need to flush the message so client can see the message. In case of we receive close connection from client, Context().Done() function will give a "close" signal and we can just exit from the loop (actually we are exiting from the function not just a loop). Here we are maintaining the connection.
-
-```
-flusher := w.(http.Flusher)
-
-for  {
-  select {
-
-    case message := <- messageChan:
-      fmt.Fprintf(w, "data: %s\n\n", message)
-      flusher.Flush()
-
-    case <-r.Context().Done():
-      return
-  }
+for {
+	select {
+		// message send handler
+		case message := <- messageChan:
+			fmt.Fprintf(w, "data: %s\n\n", message)
+			rc.Flush()
+		// signal close handler
+		case <-r.Context().Done():
+			return
+	}
 }
 ```
-
-Right before we are exiting the function, we need close the channel to avoid memory leak. We can do it by define it under defer. This defer statement should be right after we are instantiate the messageChan variable. Don't forget to put it as nil to make sure it can not be used anymore.
-```
+Непосредственно перед выходом их функции необходимо закрыть канал, чтобы избежать утечки памяти. Это можно сделать через `defer`.
+```go
 defer func() {
-  close(messageChan)
-  messageChan = nil
+	close(messageChan)
+	messageChan = nil
 }()
 ```
+## Как начать отправку сообщения клиенту?
+Мы можем просто поместить сообщение в канал. Убедитесь, что канал `messageChan` был создан до этого.
+```go
+messageChan <- "Привет мир!"
+```
 
-## How to start sending the message to client?
-We can just simply put the message under channel. Make sure the messageChan is instantiate before.
-```
-messageChan <- "Hello"
-```
+# Как реализовать SSE-клиент на Go?
 
-## How to implement SSE Client with go?
-First we initialize the http client and prepare the handshake API to server
-```
-client := &http.Client{}
+## 1. Инициализация клиента и запроса
+Сначала мы инициализируем HTTP-клиент и подготавливаем GET-запрос к эндпоинту сервера.
+```go
+client := new(http.Client)
 req, _ := http.NewRequest("GET", "http://localhost:3000/handshake", nil)
 ```
-
-We start call the server. If no answer from server we will keep trying. We put loop forever here.
-We name this state as TRY_OPEN_CONNECTION state.
-If no error happen, means that the connection has been successfully established. 
-```
+### 2. Цикл установки соединения (Reconnect)
+Чтобы клиент был отказоустойчивым, мы используем бесконечный цикл. Если сервер недоступен или соединение обрывается, клиент делает паузу и пытается подключиться снова.
+```go
 for {
-
-  // TRY_OPEN_CONNECTION state
-  res, err := client.Do(req)
-  if err != nil {
-    time.Sleep(1 * time.Second)
-    continue
-  }
-  log.Println("connection established..")
-
-  ...
-
+	res, err := client.Do(req)
+	if err != nil {
+		log.Println("Ошибка подключения, повтор через 1 сек...")
+		time.Sleep(time.Second)
+		continue
+	}
+	log.Println("Соединение установлено..")
+	
+	// переходим к чтению потока
+	scanner := bufio.NewScanner(res.Body)
 }
 ```
 
-Still under the same loop, Then we need to handle the next state, WAITING_MESSAGE state.
-We need another loop to maintain the message receivement from server.
+### 3. Чтение потоковых данных (Stream Processing)
+*SSE* передает данные посточно. Самый эффективный способ читать такой поток в Go - использовать `bufio.NewScanner`. Он автоматически блокирует выполнение и ждет новую строку от сервера.
+```go
+scanner := bufio.NewScanner(res.Body)
+for scanner.Scan() {
+	// Каждая новая строка от сервера попадает сюда
+	line := scanner.Text()
+	messages <- line
+}
 ```
-for {
+### 4. Обработка завершаения потока
+Цикл `scanner.Scan()` завершиться сам, если:
+1. Сервер штатно закрыл соединение.
+2. Произошла ошибка сети (её можно проверить через `scanner.Err()`).
+После выхода из внутреннего цикла чтения сработает `defer res.Body.Close()`, и внешний цикл `for` отправит клиента на новую попытку переподключения.
 
-  // TRY_OPEN_CONNECTION state
-  ...
+### 5. Обёртка в канал
+Чтобы удобно использовать полученные данные в других частях программы, мы оборачиваем всю логику в горутину, которая возвращает канал только для чтения:
+```go
+func reqSSE(client *http.Client) <-chan string {
+    messages := make(chan string)
+    go func() {
+        defer close(messages)
 
-  // WAITING_MESSAGE state
-  stillListening := true
-  for stillListening {
-    
-    ...
+        // Внешний цикл для реконнекта
+        for {
+            req, err := http.NewRequest("GET", url, nil)
+            if err != nil {
+                log.Println("ошибка при создании запроса:", err)
+                time.Sleep(time.Second)
+                continue
+            }
 
-  }
+            res, err := client.Do(req)
+            if err != nil {
+                log.Println("ошибка подключения:", err)
+                time.Sleep(time.Second)
+                continue
+            }
+
+            // Внутренний цикл для чтения потока
+            scanner := bufio.NewScanner(res.Body)
+            for scanner.Scan() {
+                line := scanner.Text()
+                messages <- line
+            }
+
+            res.Body.Close()
+            time.Sleep(time.Second) // пауза перед реконнектом
+        }
+    }()
+    return messages
 }
 ```
 
-We declare two channel, first one is for the message, and the second one is for the stopping the loop.
-
-```
-messageChan := make(chan string)
-stopChan := make(chan int)   
-```
-
-We define the goroutine and run it immediately to listen the message.
-Any message will goes to messageChan and any error (connection closed) will trigger the stopChan channel
-```
-go func() {
-  scanner := bufio.NewScanner(res.Body)
-
-  if scanner.Scan() {
-    messageChan <- scanner.Text()
-  }
-
-  if err := scanner.Err(); err != nil {
-    stopChan <- 1
-  }
-}()
-```
-
-And then the last part is selecting which channel is triggered.
-stopChan will change the stillListening state (that breaking the loop for WAITING_MESSAGE state).
-In the other hand, messageChan will simply printing the message to console
-
-```
-select {
-
-case <-stopChan:
-  stillListening = false
-
-case message := <-messageChan:
-  log.Println(message)
-
+Использование в main:
+```go
+func main() {
+    client := new(http.Client)
+    for msg := range reqSSE(client) {
+        log.Println("recv:", msg)
+    }
 }
 ```
 
+# Как протестировать систему?
 
-## How to run both server and client?
+Для проверки работы SSE выполните следующие шаги:
 
-You can try run the code by open a 3 console. 
+### Шаг 1: Запустите сервер
+```bash
+go run server/main.go
+```
+Вы увидите сообщение о том, что сервер запущен на `localhost:3000`.
 
-First console run the server
+### Шаг 2: Запустите клиент
+В другом терминале выполните:
+```bash
+go run client/main.go
 ```
-$ cd server
-$ go run main.go
-```
+Клиент установит соединение с сервером и будет ожидать сообщений.
 
-Second console run the client
+### Шаг 3: Отправьте сообщение
+В третьем терминале выполните:
+```bash
+curl localhost:3000/sendmessage
 ```
-$ cd client
-$ go run main.go
-```
+Клиент должен получить и вывести сообщение "Привет мир!".
 
-Third console run the curl to trigger server sending a message to client
+### Ожидаемый результат
+В терминале клиента вы увидите:
 ```
-$ curl localhost:3000
-```
-
-## Use browser as the client
-You can also use browser as client. In this case yu don't need to run the client apps.
-All you have todo is open 2 tabs on the browser, then
-
-In the first browser tab, input:
-```
-localhost:3000/handshake
-```
-
-In the second browser tab, input:
-```
-localhost:3000/sendmessage
+recv: data: Привет мир!
+recv:
 ```
 
-You will see the message is printed in the first browser.
+### Почему клиент выводит две строки?
 
+Это связано с форматом протокола SSE и тем, как клиент читает поток данных:
 
+1. **Сервер отправляет** (server/main.go:53):
+   ```go
+   fmt.Fprintf(w, "data: %s\n\n", message)
+   ```
+   Формат SSE требует двойного переноса строки `\n\n` после каждого события. Это означает, что сервер отправляет:
+   ```
+   data: Привет мир!\n\n
+   ```
+
+2. **Клиент читает построчно** (client/main.go:43-46):
+   ```go
+   scanner := bufio.NewScanner(res.Body)
+   for scanner.Scan() {
+       line := scanner.Text()
+       messages <- line
+   }
+   ```
+   `bufio.Scanner` по умолчанию разбивает поток по символам новой строки `\n`. Поэтому он читает:
+   - **Первая строка**: `data: Привет мир!` (до первого `\n`)
+   - **Вторая строка**: пустая строка `""` (между двумя `\n`)
+
+3. **Вывод в консоль**:
+   ```go
+   log.Println("recv:", msg)
+   ```
+   Выводит обе прочитанные строки:
+   - `recv: data: Привет мир!` (первое сообщение)
+   - `recv:` (второе сообщение — пустая строка)
+
+**Итог**: Двойной перенос строки `\n\n` — это стандарт SSE для разделения событий. Клиент, читая построчно, интерпретирует это как две отдельные строки: одну с данными и одну пустую.
+
+Вы можете отправлять сообщения многократно, выполняя команду `curl` повторно.

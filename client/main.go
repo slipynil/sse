@@ -10,25 +10,24 @@ import (
 const url = "http://localhost:3000/handshake"
 
 func reqSSE(client *http.Client) <-chan string {
-	// prepare the required channel
-	messages := make(chan string) // text channel
+	// создаем канал для сообщений
+	messages := make(chan string)
 
 	go func() {
 		defer close(messages)
 
-		log.Println("\nClient is running",
-			"\ntrying to initiate the communication to server\n")
+		log.Println("Клиент запущен")
 
 		// цикл где крутяться запросы реконнекты
 		for {
 			req, err := http.NewRequest("GET", url, nil)
 			if err != nil {
-				log.Println("failed to create new req:", err)
+				log.Println("ошибка при создании запроса:", err)
 				time.Sleep(time.Second)
 				continue
 			}
 
-			log.Println("try to shake hand to server")
+			log.Println("попытка отправить запрос...")
 
 			res, err := client.Do(req)
 			if err != nil {
@@ -37,20 +36,23 @@ func reqSSE(client *http.Client) <-chan string {
 				continue
 			}
 
-			log.Println("connection to server is established..")
+			log.Println("установлено соединение с сервером..")
 
+			// переходим к чтению потока
 			scanner := bufio.NewScanner(res.Body)
 			for scanner.Scan() {
 				line := scanner.Text()
 				messages <- line
 			}
 			if err := scanner.Err(); err != nil {
-				log.Println("read error:", err)
+				log.Println("ошибка чтения:", err)
 			} else {
-				log.Println("server closed connection")
+				log.Println("сервер закрыл соединение")
 			}
 			// если соединение умерло, идем на реконект
-			defer res.Body.Close()
+			res.Body.Close()
+
+			log.Println("соединение закрыто, идем на реконект...")
 			time.Sleep(time.Second)
 		}
 	}()
