@@ -7,6 +7,9 @@
 [🇬🇧 English](README.md) • [🇷🇺 Russian](docs/README_RU.md)
 
 Made with ❤️ by [@Slipynil](https://github.com/slipynil)
+
+[![Telegram](https://img.shields.io/badge/Telegram-2CA5E0?style=for-the-badge&logo=telegram&logoColor=white)](https://t.me/G0ndonClub)
+
 </div>
 
 ## What is *SSE*?
@@ -25,9 +28,10 @@ Since the server cannot initiate transmission first, the connection is always **
 ## What does this mean?
 Instead of sending data and breaking the connection, the server switches the HTTP connection to **streaming mode**. Within this "eternal" connection, the server can send a new message to the client at any time (**2, 3, 4**) without needing to receive a new request.
 In fact, the client is in a state of waiting for the response to continue. This continues until the server itself decides to end the session or until the connection is broken from the client side (**5**). In case of an accidental disconnection, the client typically automatically attempts to reconnect.
-<div align="center">
-![Sequence Diagram](docs/sse-diagram.png)
-</div>
+
+<p align="center">
+  <img src="docs/sse-diagram.png" alt="Sequence Diagram">
+</p>
 
 ## How to break the connection?
 The server can close the connection at any time by simply terminating the data stream transmission. On its side, the client can also easily interrupt the connection by canceling the active HTTP request. As soon as the client breaks the connection, the server receives a notification about it and releases the resources allocated for this channel.
