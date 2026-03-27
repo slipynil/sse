@@ -6,61 +6,61 @@ import (
 	"net/http"
 )
 
-// канал для передачи сообщений от сервера к активному клиенту
+// channel for transmitting messages from server to active client
 var messageChan chan string
 
 func handleSSE() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 
-		log.Println("получен запрос на соединение от клиента")
+		log.Println("received connection request from client")
 
-		// Устанавливаем заголовки, чтобы браузер понял:
-		// это не обычная страница, а потоковые данные (SSE)
+		// Set headers so the browser understands:
+		// this is not a regular page, but streaming data (SSE)
 		w.Header().Set("Content-Type", "text/event-stream")
-		w.Header().Set("Cache-Control", "no-cache") // Запрещаем кэшировать поток
-		w.Header().Set("Connection", "keep-alive")  // Поддерживаем соединение открытым
+		w.Header().Set("Cache-Control", "no-cache") // Disable stream caching
+		w.Header().Set("Connection", "keep-alive")  // Keep connection open
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 
-		// инициализируем контроллер, который позволяет пушить данные клиенту
-		// не закрываю поток
+		// initialize controller that allows pushing data to client
+		// without closing the stream
 		rc := http.NewResponseController(w)
 
-		// создаем канал для сообщений
+		// create channel for messages
 		messageChan = make(chan string)
 
-		// --- ОЧИЩАЕМ РЕСУРСЫ ---
-		// при выходе из функции (разрыве связи)
+		// --- CLEANUP RESOURCES ---
+		// on function exit (connection break)
 		defer func() {
 			if messageChan != nil {
 				close(messageChan)
 				messageChan = nil
 			}
-			log.Println("соединение с клиентом закрыто")
+			log.Println("connection with client closed")
 		}()
 
-		// --- ОСНОВНОЙ ЦИКЛ --- ("trap-request")
-		// удерживаем соединение и ждем событий
+		// --- MAIN LOOP --- ("trap-request")
+		// hold connection and wait for events
 		for {
 
-			// --- ПРОВЕРКА КАНАЛА ---
+			// --- CHANNEL CHECK ---
 			select {
 
-			// --- ОТПРАВКА СООБЩЕНИЯ КЛИЕНТУ ---
-			// если в канал пришло сообщение
+			// --- SEND MESSAGE TO CLIENT ---
+			// if a message arrived in the channel
 			case message := <-messageChan:
 
-				// Формат SSE: data: <message>\n\n
+				// SSE format: data: <message>\n\n
 				if _, err := fmt.Fprintf(w, "data: %s\n\n", message); err != nil {
-					log.Println("ошибка записи:", err)
+					log.Println("write error:", err)
 					return
 				}
-				// Принудительно отправляем данные из буфера в сеть
+				// Force send data from buffer to network
 				if err := rc.Flush(); err != nil {
-					log.Println("ошибка Flush:", err)
+					log.Println("flush error:", err)
 					return
 				}
 
-			// Если клиент сам зыкрыл поток
+			// If client closed the stream
 			// signal close handler
 			case <-r.Context().Done():
 				return
@@ -73,12 +73,12 @@ func handleSSE() http.HandlerFunc {
 
 func sendMessage() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// Проверяем, есть ли активное SSE-соединение
+		// Check if there is an active SSE connection
 		if messageChan != nil {
-			log.Println("отправляем сообщение клиенту...")
-			messageChan <- "Привет мир!"
+			log.Println("sending message to client...")
+			messageChan <- "Hello world!"
 		}
-		// Возвращаем 204 (успешно, без тела ответа)
+		// Return 204 (success, no response body)
 		w.WriteHeader(http.StatusNoContent)
 	}
 }
@@ -86,18 +86,18 @@ func sendMessage() http.HandlerFunc {
 func main() {
 
 	log.Println(
-		"\n Сервер запущен.\n",
-		"Сначала откройте соединение (curl или браузер),\n",
-		"а затем в другом терминале выполните:\n",
+		"\n Server started.\n",
+		"First open a connection (curl or browser),\n",
+		"then in another terminal execute:\n",
 		"curl localhost:3000/sendmessage\n",
 	)
 
-	http.HandleFunc("/handshake", handleSSE())     // эндпоинт для подключения
-	http.HandleFunc("/sendmessage", sendMessage()) // эндпоинт для отправки сообщения
+	http.HandleFunc("/handshake", handleSSE())     // endpoint for connection
+	http.HandleFunc("/sendmessage", sendMessage()) // endpoint for sending message
 
 	err := http.ListenAndServe("localhost:3000", nil)
 	if err != nil {
-		log.Fatal("ошибка сервера: %w", err)
+		log.Fatal("server error: %w", err)
 	}
 
 }
